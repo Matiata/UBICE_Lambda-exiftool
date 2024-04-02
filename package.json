@@ -1,0 +1,16 @@
+{
+  "name": "lambda_labeling",
+  "version": "1.0.0",
+  "description": "",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "aws-sdk": "^2.1588.0",
+    "exiftool-vendored": "^24.6.0",
+    "lodash": "^4.17.21"
+  }
+}
