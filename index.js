@@ -3,7 +3,7 @@ const { padStart } = require("lodash");
 const AWS = require("aws-sdk");
 const s3 = new AWS.S3();
 const rekognitionClient = new AWS.Rekognition({
-  region: 'us-east-1'
+  region: "us-east-1",
 });
 const fs = require("fs");
 
@@ -75,6 +75,13 @@ async function rekognize(imageBytes) {
   }
 }
 
+function extractFileName(path) {
+  // Split the path by '/'
+  const parts = path.split("/");
+  // Return the last part of the array, which is the file name
+  return parts[parts.length - 1];
+}
+
 exports.handler = async (event) => {
   let response = null;
   const objectKey = event.Records[0].s3.object.key;
@@ -88,10 +95,9 @@ exports.handler = async (event) => {
   }
   // Obtain the numbers in the photo
   const numbersArray = await rekognize(response.Body);
-  console.log('Obtained numbers: ', numbersArray)
-  let imageFile;
-  const imageFilePath = "/tmp/" + objectKey;
-  console.log('Image File Path: ', numbersArray)
+  console.log("Obtained numbers: ", numbersArray);
+  const imageFilePath = "/tmp/" + extractFileName(objectKey);
+  console.log("Image File Path: ", imageFilePath);
   try {
     // label the image
     fs.writeFileSync(imageFilePath, response.Body);
@@ -111,6 +117,9 @@ exports.handler = async (event) => {
         ContentType: "image/jpeg",
       })
       .promise();
+    console.log(
+      `Uploaded image ${objectKey} to bucket ${process.env.DESTINATION_BUCKET_NAME}`
+    );
     fs.unlinkSync(imageFilePath);
   } catch (err) {
     console.error("Error uploading on the destination bucket: ", err);
