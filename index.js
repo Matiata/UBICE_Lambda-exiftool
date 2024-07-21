@@ -78,6 +78,7 @@ async function rekognize(imageBytes) {
 function extractFileName(path) {
   // Split the path by '/'
   const parts = path.split("/");
+  console.log("file name parts", parts);
   // Return the last part of the array, which is the file name
   return parts[parts.length - 1];
 }
