@@ -88,10 +88,9 @@ function extractFileName(path) {
  * We want to save it in the upload bucket as evento_11/foto_b3b37d95-546a-41c0-bccb-bb2b4cf0303c
  */
 function generateFilename(objectKey) {
-  console.log("OBJECT KEY !!!!!", objectKey);
   // Split the path by '/'
   const parts = objectKey.split("/");
-  return parts[length - 2] + parts[length - 1];
+  return parts[parts.length - 2] + parts[parts.length - 1];
 }
 
 exports.handler = async (event) => {
