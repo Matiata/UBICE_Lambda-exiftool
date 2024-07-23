@@ -90,7 +90,7 @@ function extractFileName(path) {
 function generateFilename(objectKey) {
   // Split the path by '/'
   const parts = objectKey.split("/");
-  return parts[parts.length - 2] + parts[parts.length - 1];
+  return parts[parts.length - 2] + "/" + parts[parts.length - 1];
 }
 
 exports.handler = async (event) => {
