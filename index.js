@@ -102,13 +102,17 @@ function generateFilename(objectKey) {
 function extractBannedNumbers(objectKey) {
   const parts = objectKey.split("/");
   bannedNumbersString = parts[2];
-  // Remove the prefix 'bannedNumbers=' and the trailing comma
-  const numbersString = bannedNumbersString
-    .replace("bannedNumbers=", "")
-    .replace(/,$/, "");
+  // Remove the prefix "bannedNumbers="
+  const prefix = "bannedNumbers=";
+  const numbersPart = bannedNumbersString.replace(prefix, "");
 
-  // Split the remaining string by ',' and convert each part to a number
-  const numbersArray = numbersString.split(",").map(Number);
+  // Split the remaining string by underscores
+  const numberStrings = numbersPart.split("_");
+
+  // Convert to numbers and filter out any empty strings
+  const numbersArray = numberStrings
+    .filter((numStr) => numStr !== "")
+    .map((numStr) => parseInt(numStr, 10));
 
   return numbersArray;
 }
@@ -127,6 +131,7 @@ exports.handler = async (event) => {
   }
   // Obtain the numbers in the photo
   const bannedNumbers = extractBannedNumbers(objectKey);
+  console.log("Banned numbers: ", bannedNumbers);
   let numbersArray = await rekognize(response.Body, bannedNumbers);
   console.log("Obtained numbers: ", numbersArray);
   const imageFilePath = "/tmp/" + extractFileName(objectKey);
