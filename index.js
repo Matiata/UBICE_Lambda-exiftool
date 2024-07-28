@@ -44,7 +44,7 @@ async function deleteObjectFromS3(bucketName, objectKey) {
   }
 }
 
-async function rekognize(imageBytes) {
+async function rekognize(imageBytes, bannedNumbers) {
   try {
     const params = {
       Image: {
@@ -60,7 +60,13 @@ async function rekognize(imageBytes) {
     let numbersArray = commandResult.TextDetections.filter((textDetection) =>
       useRegex(textDetection.DetectedText)
     ).map((textDetection) => textDetection.DetectedText);
+    // Remove duplicated numbers as well as the banned numbers from the result
     numbersArray = Array.from(new Set(numbersArray));
+    numbersArray = numbersArray.map(Number);
+    numbersArray = numbersArray.filter(
+      (number) => !bannedNumbers.includes(number)
+    );
+    // Format numbers accordingly for labeling that meets photomechanic criteria
     if (!numbersArray.length) {
       numbersArray = ["#"];
     } else {
@@ -84,13 +90,27 @@ function extractFileName(path) {
 }
 
 /*
- * objectKey is like this: publicImages/_public/evento_11/foto_b3b37d95-546a-41c0-bccb-bb2b4cf0303c
+ * objectKey is like this: publicImages/_public/bannedNumbers=2003,2004,/evento_11/foto_b3b37d95-546a-41c0-bccb-bb2b4cf0303c
  * We want to save it in the upload bucket as evento_11/foto_b3b37d95-546a-41c0-bccb-bb2b4cf0303c
  */
 function generateFilename(objectKey) {
   // Split the path by '/'
   const parts = objectKey.split("/");
   return parts[parts.length - 2] + "/" + parts[parts.length - 1];
+}
+
+function extractBannedNumbers(objectKey) {
+  const parts = objectKey.split("/");
+  bannedNumbersString = parts[2];
+  // Remove the prefix 'bannedNumbers=' and the trailing comma
+  const numbersString = bannedNumbersString
+    .replace("bannedNumbers=", "")
+    .replace(/,$/, "");
+
+  // Split the remaining string by ',' and convert each part to a number
+  const numbersArray = numbersString.split(",").map(Number);
+
+  return numbersArray;
 }
 
 exports.handler = async (event) => {
@@ -105,7 +125,8 @@ exports.handler = async (event) => {
     console.error("Error obtaining S3 object: ", err);
   }
   // Obtain the numbers in the photo
-  const numbersArray = await rekognize(response.Body);
+  const bannedNumbers = extractBannedNumbers(objectKey);
+  let numbersArray = await rekognize(response.Body, bannedNumbers);
   console.log("Obtained numbers: ", numbersArray);
   const imageFilePath = "/tmp/" + extractFileName(objectKey);
   console.log("Image File Path: ", imageFilePath);
