@@ -103,7 +103,7 @@ function extractBannedNumbers(objectKey) {
   const parts = objectKey.split("/");
   bannedNumbersString = parts[2];
   // Remove the prefix "bannedNumbers="
-  const prefix = "bannedNumbers=";
+  const prefix = "bannedNumbers-";
   const numbersPart = bannedNumbersString.replace(prefix, "");
 
   // Split the remaining string by underscores
