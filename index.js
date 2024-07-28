@@ -116,6 +116,7 @@ function extractBannedNumbers(objectKey) {
 exports.handler = async (event) => {
   let response = null;
   const objectKey = event.Records[0].s3.object.key;
+  console.log("Object Key: ", objectKey);
   try {
     // Obtain the uploaded photo
     response = await s3
