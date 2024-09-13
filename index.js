@@ -8,16 +8,25 @@ const rekognitionClient = new AWS.Rekognition({
 const fs = require("fs");
 
 async function writeMetadataOnImage(imagePath, numbers) {
-  let unrepeatedNumbers = Array.from(new Set(numbers));
-  if (!unrepeatedNumbers.length) {
-    unrepeatedNumbers = ["#"];
+  let finalTags = Array.from(new Set(numbers));
+  if (!finalTags.length) {
+    finalTags = ["#"];
   } else {
-    unrepeatedNumbers = unrepeatedNumbers.map((number) =>
-      padStart(String(number), 5, "0")
-    );
+    finalTags = finalTags.map((number) => {
+      return number === '#' ? number : padStart(String(number), 5, "0");
+    });
   }
-  const { Keywords } = await exiftool.read(imagePath);
-  await exiftool.write(imagePath, { Keywords: [...unrepeatedNumbers] }, [
+  let originalTags = await exiftool.read(imagePath, ["-keywords"]);
+  originalTags = originalTags.Keywords ?? '';
+  console.log("originalTags: ", originalTags);
+
+  originalTags.split(',').map((tag) => {
+    if (!finalTags.includes(tag)) {
+      finalTags.push(tag);
+    }
+  });
+
+  await exiftool.write(imagePath, { Keywords: [...finalTags] }, [
     "-overwrite_original",
   ]);
 }
@@ -139,6 +148,7 @@ exports.handler = async (event) => {
   try {
     // label the image
     fs.writeFileSync(imageFilePath, response.Body);
+    console.log("A tag is being written on the image");
     await writeMetadataOnImage(imageFilePath, numbersArray);
   } catch (err) {
     console.error("Error writing on image metadata with exiftool: ", err);
