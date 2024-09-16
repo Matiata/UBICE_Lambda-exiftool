@@ -9,6 +9,22 @@ const fs = require("fs");
 
 async function writeMetadataOnImage(imagePath, numbers) {
   let finalTags = Array.from(new Set(numbers));
+
+  let originalTags = await exiftool.read(imagePath, ["-keywords"]);
+  originalTags = originalTags.Keywords ?? [];
+  if (typeof originalTags === 'string') {
+    originalTags = originalTags.split(',');
+  } else if (typeof originalTags === 'array') {
+    originalTags = originalTags.map((tag) => tag.trim());
+  }
+  console.log("originalTags: ", originalTags);
+
+  originalTags.map((tag) => {
+    if (!finalTags.includes(tag)) {
+      finalTags.push(tag);
+    }
+  });
+
   if (!finalTags.length) {
     finalTags = ["#"];
   } else {
@@ -16,15 +32,7 @@ async function writeMetadataOnImage(imagePath, numbers) {
       return number === '#' ? number : padStart(String(number), 5, "0");
     });
   }
-  let originalTags = await exiftool.read(imagePath, ["-keywords"]);
-  originalTags = originalTags.Keywords ?? '';
-  console.log("originalTags: ", originalTags);
-
-  originalTags.split(',').map((tag) => {
-    if (!finalTags.includes(tag)) {
-      finalTags.push(tag);
-    }
-  });
+  console.log("finalTags: ", finalTags);
 
   await exiftool.write(imagePath, { Keywords: [...finalTags] }, [
     "-overwrite_original",
