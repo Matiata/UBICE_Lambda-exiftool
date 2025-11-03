@@ -1,15 +1,24 @@
-const { exiftool } = require("exiftool-vendored");
-const { padStart } = require("lodash");
+import { createRequire } from "module";
+const require = createRequire(import.meta.url);
+const fs = require("fs");
+const _ = require("lodash"); // full lodash module
+import { execSync, execFileSync } from "child_process";
+
+process.env.LD_LIBRARY_PATH = "/opt/lib64:" + (process.env.LD_LIBRARY_PATH || "");
+process.env.PERL5LIB = "/opt/perl/lib/5.42.0:/opt/perl/lib/site_perl/5.42.0";
+process.env.LC_ALL = "C";
+process.env.LANG = "C";
+
 const AWS = require("aws-sdk");
 const s3SA = new AWS.S3({ region: "sa-east-1" });
 const s3US = new AWS.S3({ region: "us-west-2" });
 const rekognitionClient = new AWS.Rekognition({ region: "us-west-2" });
-const fs = require("fs");
 
 async function writeMetadataOnImage(imagePath, numbers) {
   let finalTags = Array.from(new Set(numbers));
 
-  let originalTags = await exiftool.read(imagePath, ["-keywords"]);
+  let originalTags = execFileSync("exiftool", ["-j", "-keywords", imagePath]);
+  originalTags = JSON.parse(originalTags)[0];
   originalTags = originalTags.Keywords ?? [];
   originalTags = (typeof originalTags === 'string') ? originalTags.split(',') : originalTags;
   console.log("originalTags: ", originalTags);
@@ -24,13 +33,15 @@ async function writeMetadataOnImage(imagePath, numbers) {
     finalTags = ["#"];
   } else {
     finalTags = finalTags.map((number) => {
-      return number === '#' ? number : padStart(String(number), 5, "0");
+      return (number === '#' || !Number.isInteger(number)) ? number : _.padStart(String(number), 5, "0");
     });
   }
   console.log("finalTags: ", finalTags);
 
-  await exiftool.write(imagePath, { Keywords: [...finalTags] }, [
+  execFileSync("exiftool", [
     "-overwrite_original",
+    `-keywords=${finalTags.join(",")}`,
+    imagePath,
   ]);
 }
 
@@ -83,7 +94,7 @@ async function rekognize(imageBytes, bannedNumbers) {
       numbersArray = ["#"];
     } else {
       numbersArray = numbersArray.map((number) =>
-        padStart(String(number), 5, "0")
+        _.padStart(String(number), 5, "0")
       );
     }
     return numbersArray;
@@ -132,7 +143,7 @@ async function notifyUbice(photos) {
   const results = [];
   for (const photo of photos) {
     try {
-      const res = await fetch('https://ubice.com.ar/api/notifications/photo', {
+      const res = await fetch(process.env.NOTIFICATION_ENDPOINT, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -320,7 +331,7 @@ async function downloadAndParseOkFile(s3Client, bucketName, objectKey) {
   }
 }
 
-exports.handler = async (event) => {
+export const handler = async (event) => {
   const record = event.Records[0];
   const objectKey = record.s3.object.key;
   if (!objectKey.endsWith('.ok')) {
@@ -363,6 +374,7 @@ exports.handler = async (event) => {
   console.log("Notification results: ", notifyResults);
 
   console.log("Batch processing results: ", results);
+
   return {
     statusCode: 200,
     body: JSON.stringify({

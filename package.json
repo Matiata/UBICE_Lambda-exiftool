@@ -10,7 +10,6 @@
   "license": "ISC",
   "dependencies": {
     "aws-sdk": "^2.1588.0",
-    "exiftool-vendored": "^24.6.0",
     "lodash": "^4.17.21"
   }
 }
