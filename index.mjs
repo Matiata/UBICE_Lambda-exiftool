@@ -172,8 +172,10 @@ async function notifyUbice(photos) {
   return results;
 }
 
-async function processImage(objectKey, eventID, filename) {
-  const downloadKey = 'evento_' + eventID + '/' + filename;
+async function processImage(objectKey, eventID, filename, ph) {
+  const fname = ph ? ph + '_' + filename : filename;
+  const downloadKey = 'evento_' + eventID + '/' + fname;
+  console.log("Processing image: ", { objectKey, eventID, fname, downloadKey });
   try {
     // Get the uploaded photo
     const response = await s3SA
@@ -194,7 +196,7 @@ async function processImage(objectKey, eventID, filename) {
       const numbersArray = await rekognize(response.Body, bannedNumbers);
       console.log("Obtained numbers: ", numbersArray);
 
-      const imageFilePath = "/tmp/" + filename;
+      const imageFilePath = "/tmp/" + fname;
 
       // Write metadata
       fs.writeFileSync(imageFilePath, response.Body);
@@ -210,7 +212,7 @@ async function processImage(objectKey, eventID, filename) {
 
       return {
         event: eventID,
-        filename: filename,
+        filename: fname,
         key: downloadKey,
         status: 'processed',
         shouldNotify: false,
@@ -226,7 +228,7 @@ async function processImage(objectKey, eventID, filename) {
       await deleteObjectFromS3(process.env.UPLOAD_BUCKET_NAME, objectKey);
       return {
         event: eventID,
-        filename: filename,
+        filename: fname,
         key: downloadKey,
         status: 'skipped',
         shouldNotify: true
@@ -237,7 +239,7 @@ async function processImage(objectKey, eventID, filename) {
     console.error("Error processing image:", err, { objectKey, eventID, filename });
     return {
       event: eventID,
-      filename: filename,
+      filename: fname,
       key: downloadKey,
       status: 'error',
       error: err.message,
@@ -324,7 +326,14 @@ async function downloadAndParseOkFile(s3Client, bucketName, objectKey) {
     }).promise();
     const okFileContent = okFile.Body.toString('utf-8');
     // Parse keys from the .ok file (one per line)
-    return okFileContent.split('\n').map(line => line.trim()).filter(Boolean);
+    let lines = okFileContent.split('\n').map(line => line.trim()).filter(Boolean);
+    let ph = lines.filter(line => line.includes('PHOTOGRAPHER:'))[0] ?? null;
+    if (ph != null) {
+      lines = lines.filter(line => !line.includes('PHOTOGRAPHER:'));
+      ph = ph.replace('PHOTOGRAPHER:', '').trim();
+      console.log("PH received: ", ph);
+    }
+    return [lines, ph];
   } catch (err) {
     console.error('Error downloading .ok file:', err);
     throw err;
@@ -339,8 +348,9 @@ export const handler = async (event) => {
   }
 
   let imageKeys;
+  let ph;
   try {
-    imageKeys = await downloadAndParseOkFile(s3SA, process.env.UPLOAD_BUCKET_NAME, objectKey);
+    [imageKeys, ph] = await downloadAndParseOkFile(s3SA, process.env.UPLOAD_BUCKET_NAME, objectKey);
   } catch (err) {
     return { statusCode: 500, body: 'Error downloading .ok file. ' + objectKey };
   }
@@ -353,7 +363,7 @@ export const handler = async (event) => {
     eventID = getEvent(imageKey);
     const filename = getFilename(imageKey);
     try {
-      const result = await processImage(imageKey, eventID, filename);
+      const result = await processImage(imageKey, eventID, filename, ph);
       results.push(result);
       if (result.shouldNotify) {
         existingPhotos.push(result);
