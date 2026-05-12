@@ -8,41 +8,79 @@ process.env.LD_LIBRARY_PATH = "/opt/lib64:" + (process.env.LD_LIBRARY_PATH || ""
 process.env.PERL5LIB = "/opt/perl/lib/5.42.0:/opt/perl/lib/site_perl/5.42.0";
 process.env.LC_ALL = "C";
 process.env.LANG = "C";
-
+const OK_DATA_TYPE_VIDEO = "VIDEO";
+const OK_DATA_TYPE_PHOTO = "PHOTO";
 const AWS = require("aws-sdk");
 const s3SA = new AWS.S3({ region: "sa-east-1" });
 const s3US = new AWS.S3({ region: "us-west-2" });
 const rekognitionClient = new AWS.Rekognition({ region: "us-west-2" });
 
 async function writeMetadataOnImage(imagePath, numbers) {
-  let finalTags = Array.from(new Set(numbers));
+  let finalTags = Array.from(new Set(numbers.map((value) => String(value).trim()).filter(Boolean)));
+  let originalTags = [];
 
-  let originalTags = execFileSync("exiftool", ["-j", "-keywords", imagePath]);
-  originalTags = JSON.parse(originalTags)[0];
-  originalTags = originalTags.Keywords ?? [];
-  originalTags = (typeof originalTags === 'string') ? originalTags.split(',') : originalTags;
-  console.log("originalTags: ", originalTags);
+  try {
+    const originalMetadataRaw = execFileSync("exiftool", ["-j", "-keywords", imagePath], {
+      encoding: "utf8",
+    });
+    const parsedMetadata = JSON.parse(originalMetadataRaw)?.[0] ?? {};
+    if (Array.isArray(parsedMetadata.Keywords)) {
+      originalTags = parsedMetadata.Keywords;
+    } else if (typeof parsedMetadata.Keywords === "string") {
+      originalTags = parsedMetadata.Keywords
+        .split(",")
+        .map((value) => value.trim())
+        .filter(Boolean);
+    }
+    console.log("originalTags:", originalTags);
+  } catch (err) {
+    console.warn("Could not read existing exif keywords:", err?.message ?? err);
+  }
 
-  originalTags.map((tag) => {
+  for (const tag of originalTags) {
     if (!finalTags.includes(tag)) {
       finalTags.push(tag);
     }
-  });
+  }
 
   if (!finalTags.length) {
     finalTags = ["#"];
   } else {
     finalTags = finalTags.map((number) => {
-      return (number === '#' || !Number.isInteger(number)) ? number : _.padStart(String(number), 5, "0");
+      return (number === "#" || !Number.isInteger(number))
+        ? String(number)
+        : _.padStart(String(number), 5, "0");
     });
   }
-  console.log("finalTags: ", finalTags);
+  console.log("finalTags:", finalTags);
 
-  execFileSync("exiftool", [
-    "-overwrite_original",
-    `-keywords=${finalTags.join(",")}`,
-    imagePath,
-  ]);
+  try {
+    const writeOutput = execFileSync("exiftool", [
+      `-keywords=${finalTags.join(",")}`,
+      "-overwrite_original",
+      imagePath,
+    ], {
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    console.log("exiftool write output:", writeOutput.trim() || "(empty stdout)");
+  } catch (err) {
+    const stderr = err?.stderr?.toString?.("utf8") ?? "";
+    const stdout = err?.stdout?.toString?.("utf8") ?? "";
+    console.error("Exiftool write failed", {
+      imagePath,
+      message: err?.message,
+      stdout,
+      stderr,
+    });
+    throw err;
+  }
+
+  const verifyRaw = execFileSync("exiftool", ["-j", "-keywords", imagePath], {
+    encoding: "utf8",
+  });
+  console.log("exiftool keywords after write:", verifyRaw);
+  return finalTags;
 }
 
 const useRegex = (input) => {
@@ -129,17 +167,23 @@ function extractBannedNumbers(objectKey) {
 
 // objectKey: publicImages/_public/bannedNumbers-xxx_yyy/evento_xxx/fotoXXX.jpg
 function getFilename(objectKey) {
-  const parts = objectKey.split("/");
+  const parts = objectKey?.split("/") ?? [];
   return parts[parts.length - 1] ?? null;
 }
 
 function getEvent(objectKey) {
-  const parts = objectKey.split("/");
-  const id = parts[parts.length - 2].split("_");
-  return id[id.length - 1] ?? null;
+  const parts = objectKey?.split("/") ?? [];
+  for (const part of parts) {
+    const match = part.match(/evento[_-](\d+)/i);
+    if (match?.[1]) {
+      return match[1];
+    }
+  }
+  return null;
 }
 
 async function notifyUbice(photos) {
+  // Here we notify Ubice with photos that already exists in the download bucket, so we do it one by one
   const results = [];
   for (const photo of photos) {
     try {
@@ -188,6 +232,8 @@ async function processImage(objectKey, eventID, filename, ph) {
       Prefix: downloadKey
     }).promise();
 
+    console.log("photoExistsResponse:", photoExistsResponse.Contents?.length === 0 ? "New photo" : "Photo already exists");
+
     if (photoExistsResponse.Contents?.length === 0) {
       // Process new photo
       const bannedNumbers = extractBannedNumbers(objectKey);
@@ -201,12 +247,37 @@ async function processImage(objectKey, eventID, filename, ph) {
       // Write metadata
       fs.writeFileSync(imageFilePath, response.Body);
       console.log("Writing tags on the image");
-      await writeMetadataOnImage(imageFilePath, numbersArray);
+      const finalTags = await writeMetadataOnImage(imageFilePath, numbersArray);
 
       // Read the processed image for batch upload
-      const imageFile = fs.readFileSync(imageFilePath);
-      fs.unlinkSync(imageFilePath);
-
+      const taggedBytes = fs.readFileSync(imageFilePath);
+      // fs.unlinkSync(imageFilePath);
+      const metadataRaw = execFileSync("exiftool", ["-j", "-all", imageFilePath], {
+        encoding: "utf8",
+      });
+      let metadata = {};
+      try {
+        metadata = JSON.parse(metadataRaw)?.[0] ?? {};
+      } catch (err) {
+        console.warn("Could not parse exiftool metadata JSON:", err?.message ?? err);
+      }
+      const description =
+        metadata.Description ??
+        metadata.ImageDescription ??
+        metadata["Caption-Abstract"] ??
+        metadata.Headline ??
+        null;
+      const dateTime =
+        metadata.DateTimeOriginal ??
+        metadata.DateCreated ??
+        metadata.CreateDate ??
+        metadata.ModifyDate ??
+        null;
+      console.log("exiftool metadata before upload:", {
+        description,
+        dateTime,
+        keywords: metadata.Keywords ?? null,
+      });
       // Clean up uploaded file
       // await deleteObjectFromS3(process.env.UPLOAD_BUCKET_NAME, objectKey);
 
@@ -217,9 +288,13 @@ async function processImage(objectKey, eventID, filename, ph) {
         status: 'processed',
         shouldNotify: false,
         imageData: {
+          filePath: imageFilePath,
           key: downloadKey,
-          body: imageFile,
-          contentType: "image/jpeg"
+          body: taggedBytes,
+          keywords: finalTags,
+          description: description,
+          dateTime: dateTime,
+          contentType: response.ContentType ?? "image/jpeg"
         }
       };
     } else {
@@ -251,6 +326,7 @@ async function processImage(objectKey, eventID, filename, ph) {
 async function batchUploadToDestination(imagesToUpload) {
   const uploadPromises = imagesToUpload.map(async (imageData) => {
     try {
+      console.log("imageData before upload:", { imageData });
       await s3US.putObject({
         Bucket: process.env.DESTINATION_BUCKET_NAME,
         Key: imageData.key,
@@ -263,21 +339,26 @@ async function batchUploadToDestination(imagesToUpload) {
     } catch (err) {
       console.error(`Error uploading image ${imageData.key}:`, err);
       return { key: imageData.key, status: 'error', error: err.message };
+    } finally {
+      fs.unlinkSync(imageData.filePath);
     }
   });
 
   return await Promise.all(uploadPromises);
 }
 
-async function uploadOkFile(uploadResults, eventID) {
+async function uploadOkFile(uploadResults, eventID, imagesData) {
   // Filter only successful uploads
   const successfulKeys = uploadResults
     .filter(result => result.status === 'success')
     .map(result => result.key);
   if (successfulKeys.length === 0) return null;
-
+  let okContent = "";
+  for (const key of successfulKeys) {
+    const imageData = imagesData.find(imageData => imageData.key === key);
+    okContent += `${key};keywords:${imageData.keywords.join(',')};description:${imageData.description};dateTime:${imageData.dateTime}\n`;
+  }
   // Create .ok file content (one key per line)
-  const okContent = successfulKeys.join('\n');
   // Name the .ok file with a timestamp
   const okFileName = `batch_${Date.now()}.ok`;
 
@@ -317,8 +398,25 @@ async function cleanUploadBucket(uploadResults, okFileKey) {
   console.log('Cleaned up upload bucket');
 }
 
+function parseManifestDataType(line) {
+  const cleanLine = line.trim();
+  if (!cleanLine.startsWith("DATA_TYPE:")) {
+    return null;
+  }
+  const dataType = cleanLine.replace("DATA_TYPE:", "").trim().toUpperCase();
+  if (dataType === OK_DATA_TYPE_VIDEO || dataType === OK_DATA_TYPE_PHOTO) {
+    return dataType;
+  }
+  return null;
+}
+
+
 // Download and parse the .ok file
 async function downloadAndParseOkFile(s3Client, bucketName, objectKey) {
+  const itemKeys = [];
+  let photographer = null;
+  let dataType = null;
+  let firstNonEmptyLineSeen = false;
   try {
     const okFile = await s3Client.getObject({
       Bucket: bucketName,
@@ -327,17 +425,30 @@ async function downloadAndParseOkFile(s3Client, bucketName, objectKey) {
     const okFileContent = okFile.Body.toString('utf-8');
     // Parse keys from the .ok file (one per line)
     let lines = okFileContent.split('\n').map(line => line.trim()).filter(Boolean);
-    let ph = lines.filter(line => line.includes('PHOTOGRAPHER:'))[0] ?? null;
-    if (ph != null) {
-      lines = lines.filter(line => !line.includes('PHOTOGRAPHER:'));
-      ph = ph.replace('PHOTOGRAPHER:', '').trim();
-      console.log("PH received: ", ph);
+    for (const line of lines) {
+      const cleanLine = line.trim();
+      if (!cleanLine) {
+        continue;
+      }
+      if (!firstNonEmptyLineSeen) {
+        firstNonEmptyLineSeen = true;
+        const firstLineType = parseManifestDataType(cleanLine);
+        if (firstLineType) {
+          dataType = firstLineType;
+          continue;
+        }
+      }
+      if (cleanLine.startsWith("PHOTOGRAPHER:")) {
+        photographer = cleanLine.replace("PHOTOGRAPHER:", "").trim();
+        continue;
+      }
+      itemKeys.push(cleanLine);
     }
-    return [lines, ph];
   } catch (err) {
     console.error('Error downloading .ok file:', err);
     throw err;
   }
+  return [itemKeys, photographer, dataType];
 }
 
 export const handler = async (event) => {
@@ -360,6 +471,7 @@ export const handler = async (event) => {
   const imagesToUpload = [];
   let eventID = null;
   for (const imageKey of imageKeys) {
+    console.log("Processing image: ", imageKey);
     eventID = getEvent(imageKey);
     const filename = getFilename(imageKey);
     try {
@@ -377,7 +489,7 @@ export const handler = async (event) => {
   }
 
   const uploadResults = await batchUploadToDestination(imagesToUpload);
-  const okFile = await uploadOkFile(uploadResults, eventID);
+  const okFile = await uploadOkFile(uploadResults, eventID, imagesToUpload);
   console.log("OK file uploaded: ", okFile);
   await cleanUploadBucket(uploadResults, objectKey);
   const notifyResults = await notifyUbice(existingPhotos);
